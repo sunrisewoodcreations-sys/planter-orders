@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planter Box Orders - Cloud Sync</title>
+  
+  <!-- React and ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel for JSX transformation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const { Calendar, Package, TrendingUp, Download, Plus, Edit2, Trash2, DollarSign } = lucide;
+
+    // 🔥 FIREBASE CONFIGURATION - CONFIGURED FOR YOUR PROJECT
+    const firebaseConfig = {
+      apiKey: "AIzaSyC93INjbUl7i6fXwql-91ZGBVE5rA5RSuY",
+      authDomain: "planter-box-orders.firebaseapp.com",
+      databaseURL: "https://planter-box-orders-default-rtdb.firebaseio.com",
+      projectId: "planter-box-orders",
+      storageBucket: "planter-box-orders.firebasestorage.app",
+      messagingSenderId: "541456064022",
+      appId: "1:541456064022:web:2d86a9097054bcad6c1f37"
+    };
+
+    // Check if Firebase is configured
+    const isFirebaseConfigured = true;
+
+    // Initialize Firebase
+    let database = null;
+    let ordersRef = null;
+
+    if (isFirebaseConfigured) {
+      try {
+        firebase.initializeApp(firebaseConfig);
+        database = firebase.database();
+        ordersRef = database.ref('orders');
+        console.log('✅ Firebase initialized successfully!');
+      } catch (error) {
+        console.error('❌ Firebase initialization error:', error);
+      }
+    }
+
+    function OrderManagementSystem() {
+      const [orders, setOrders] = useState([]);
+      const [currentView, setCurrentView] = useState('dashboard');
+      const [filterStatus, setFilterStatus] = useState('all');
+      const [editingOrder, setEditingOrder] = useState(null);
+      const [showForm, setShowForm] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const [deleteConfirm, setDeleteConfirm] = useState(null);
+      const [syncStatus, setSyncStatus] = useState('Checking...');
+      
+      const [formData, setFormData] = useState({
+        customerName: '',
+        dateOrdered: '',
+        dateMessaged: new Date().toISOString().split('T')[0],
+        buildStatus: 'not started',
+        deliveryType: 'unknown',
+        deliveryCharge: '',
+        datePickedUp: '',
+        price: '',
+        amountPaid: '',
+        paymentMethod: 'unknown',
+        planterSize: ''
+      });
+
+      // Load data from Firebase
+      useEffect(() => {
+        if (!isFirebaseConfigured) {
+          setLoading(false);
+          setSyncStatus('⚠️ Firebase Not Configured');
+          return;
+        }
+
+        if (!ordersRef) {
+          setLoading(false);
+          setSyncStatus('❌ Firebase Error');
+          return;
+        }
+
+        setSyncStatus('🔄 Syncing...');
+        
+        // Listen for real-time updates
+        const unsubscribe = ordersRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            const ordersArray = Object.keys(data).map(key => ({
+              ...data[key],
+              id: key
+            }));
+            
+            // Recalculate amount due for all orders
+            const ordersWithCorrectAmountDue = ordersArray.map(order => {
+              const price = parseFloat(order.price) || 0;
+              const deliveryCharge = parseFloat(order.deliveryCharge) || 0;
+              const amountPaid = parseFloat(order.amountPaid) || 0;
+              const totalPrice = price + deliveryCharge;
+              const amountDue = totalPrice - amountPaid;
+              
+              return {
+                ...order,
+                totalPrice: totalPrice,
+                amountDue: amountDue
+              };
+            });
+            
+            setOrders(ordersWithCorrectAmountDue);
+            setSyncStatus('✅ Synced');
+          } else {
+            setOrders([]);
+            setSyncStatus('✅ Synced (No Data)');
+          }
+          setLoading(false);
+        }, (error) => {
+          console.error('Firebase read error:', error);
+          setSyncStatus('❌ Sync Error');
+          setLoading(false);
+        });
+
+        // Cleanup listener on unmount
+        return () => ordersRef.off('value', unsubscribe);
+      }, []);
+
+      const currentYear = new Date().getFullYear();
+      const ordersThisYear = orders.filter(o => {
+        const year = o.dateMessaged ? new Date(o.dateMessaged).getFullYear() : 
+                     o.dateOrdered ? new Date(o.dateOrdered).getFullYear() : null;
+        return year === currentYear;
+      });
+
+      const ordersNotStarted = orders.filter(o => o.buildStatus === 'not started');
+      const ordersBeingMade = orders.filter(o => o.buildStatus === 'being made' || o.buildStatus === 'Waiting on glue to dry');
+      const ordersWaitingPickup = orders.filter(o => o.buildStatus === 'Ready for pickup');
+      const ordersWaitingDelivery = orders.filter(o => o.buildStatus === 'ready for delivery');
+      const ordersPickedUp = orders.filter(o => o.buildStatus === 'picked up');
+      const ordersDelivered = orders.filter(o => o.buildStatus === 'delivered');
+      const justMessaged = orders.filter(o => o.buildStatus === 'just messaged');
+      const peopleMessagedThisYear = ordersThisYear.length;
+
+      const totalRevenue = ordersThisYear.reduce((sum, o) => sum + (parseFloat(o.amountPaid) || 0), 0);
+      const deliveryRevenue = ordersThisYear.reduce((sum, o) => sum + (parseFloat(o.deliveryCharge) || 0), 0);
+      const revenueWithoutDelivery = totalRevenue - deliveryRevenue;
+      const salesTaxOwed = revenueWithoutDelivery * 0.06;
+
+      const saveToFirebase = async (orderData) => {
+        if (!isFirebaseConfigured || !ordersRef) {
+          alert('Firebase is not configured. Your data will not be saved.');
+          return false;
+        }
+
+        try {
+          setSyncStatus('🔄 Saving...');
+          if (orderData.id && typeof orderData.id === 'string' && orderData.id.startsWith('-')) {
+            // Update existing order
+            await ordersRef.child(orderData.id).update(orderData);
+          } else {
+            // Create new order
+            const newOrderRef = ordersRef.push();
+            await newOrderRef.set({
+              ...orderData,
+              id: newOrderRef.key
+            });
+          }
+          setSyncStatus('✅ Saved');
+          return true;
+        } catch (error) {
+          console.error('Firebase save error:', error);
+          setSyncStatus('❌ Save Error');
+          alert('Error saving to Firebase: ' + error.message);
+          return false;
+        }
+      };
+
+      const deleteFromFirebase = async (orderId) => {
+        if (!isFirebaseConfigured || !ordersRef) {
+          alert('Firebase is not configured. Cannot delete.');
+          return false;
+        }
+
+        try {
+          setSyncStatus('🔄 Deleting...');
+          await ordersRef.child(orderId).remove();
+          setSyncStatus('✅ Deleted');
+          return true;
+        } catch (error) {
+          console.error('Firebase delete error:', error);
+          setSyncStatus('❌ Delete Error');
+          alert('Error deleting from Firebase: ' + error.message);
+          return false;
+        }
+      };
+
+      const handleEdit = (item) => {
+        setEditingOrder(item);
+        setFormData({ ...item });
+        setShowForm(true);
+        setCurrentView('form');
+      };
+
+      const resetForm = () => {
+        setFormData({
+          customerName: '',
+          dateOrdered: '',
+          dateMessaged: new Date().toISOString().split('T')[0],
+          buildStatus: 'not started',
+          deliveryType: 'unknown',
+          deliveryCharge: '',
+          datePickedUp: '',
+          price: '',
+          amountPaid: '',
+          paymentMethod: 'unknown',
+          planterSize: ''
+        });
+        setEditingOrder(null);
+        setShowForm(false);
+      };
+
+      const getFilteredOrders = () => {
+        switch(filterStatus) {
+          case 'all': return orders;
+          case 'year': return ordersThisYear;
+          case 'not-started': return ordersNotStarted;
+          case 'being-made': return ordersBeingMade;
+          case 'waiting-pickup': return ordersWaitingPickup;
+          case 'waiting-delivery': return ordersWaitingDelivery;
+          case 'picked-up': return ordersPickedUp;
+          case 'delivered': return ordersDelivered;
+          case 'just-messaged': return justMessaged;
+          case 'people-messaged-year': return ordersThisYear;
+          default: return orders;
+        }
+      };
+
+      const exportToSpreadsheet = () => {
+        const excelData = ordersThisYear.map(o => ({
+          'Customer Name': o.customerName,
+          'Date Messaged': o.dateMessaged || '',
+          'Date Ordered': o.dateOrdered || '',
+          'Build Status': o.buildStatus,
+          'Delivery Type': o.deliveryType,
+          'Delivery Charge': o.deliveryCharge || 0,
+          'Date Picked Up': o.datePickedUp || '',
+          'Price': o.price || 0,
+          'Amount Paid': o.amountPaid || 0,
+          'Amount Due': o.amountDue || 0,
+          'Payment Method': o.paymentMethod,
+          'Planter Size': o.planterSize || ''
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Orders YTD');
+        XLSX.writeFile(wb, `orders_${currentYear}_ytd.xlsx`);
+      };
+
+      if (loading) {
+        return (
+          <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+            <div className="text-2xl text-stone-600">Loading...</div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-stone-50">
+          {/* Header */}
+          <div className="bg-gradient-to-r from-amber-900 via-orange-800 to-stone-800 shadow-xl">
+            <div className="max-w-7xl mx-auto px-6 py-8">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-4xl font-bold text-amber-50 tracking-tight" style={{ fontFamily: 'Georgia, serif' }}>
+                    Planter box orders
+                  </h1>
+                  <p className="text-amber-200 mt-2 text-sm">{syncStatus}</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      resetForm();
+                      setCurrentView('form');
+                      setShowForm(true);
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                  >
+                    <Plus size={20} />
+                    New Order
+                  </button>
+                  <button
+                    onClick={exportToSpreadsheet}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                  >
+                    <Download size={20} />
+                    Export YTD
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-6 py-8">
+            {currentView === 'dashboard' && (
+              <div>
+                {/* Metrics Dashboard */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                  {/* Total Orders */}
+                  <div onClick={() => { setFilterStatus('all'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-amber-200 hover:border-amber-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-amber-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{orders.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Total Orders</h3>
+                  </div>
+
+                  {/* Orders This Year */}
+                  <div onClick={() => { setFilterStatus('year'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-green-200 hover:border-green-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Calendar className="text-green-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersThisYear.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Orders This Year</h3>
+                  </div>
+
+                  {/* People Messaged This Year */}
+                  <div onClick={() => { setFilterStatus('people-messaged-year'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-indigo-200 hover:border-indigo-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-indigo-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{peopleMessagedThisYear}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">People Messaged This Year</h3>
+                  </div>
+
+                  {/* Just Messaged */}
+                  <div onClick={() => { setFilterStatus('just-messaged'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-yellow-200 hover:border-yellow-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-yellow-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{justMessaged.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Just Messaged</h3>
+                  </div>
+
+                  {/* Not Started */}
+                  <div onClick={() => { setFilterStatus('not-started'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-red-200 hover:border-red-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-red-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersNotStarted.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Not Started</h3>
+                  </div>
+
+                  {/* Being Made */}
+                  <div onClick={() => { setFilterStatus('being-made'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-blue-200 hover:border-blue-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-blue-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersBeingMade.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Being Made</h3>
+                  </div>
+
+                  {/* Waiting for Pickup */}
+                  <div onClick={() => { setFilterStatus('waiting-pickup'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-purple-200 hover:border-purple-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-purple-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersWaitingPickup.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Waiting for Pickup</h3>
+                  </div>
+
+                  {/* Waiting for Delivery */}
+                  <div onClick={() => { setFilterStatus('waiting-delivery'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-orange-200 hover:border-orange-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-orange-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersWaitingDelivery.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Waiting for Delivery</h3>
+                  </div>
+
+                  {/* Picked Up */}
+                  <div onClick={() => { setFilterStatus('picked-up'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-teal-200 hover:border-teal-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-teal-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersPickedUp.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Picked Up</h3>
+                  </div>
+
+                  {/* Delivered */}
+                  <div onClick={() => { setFilterStatus('delivered'); setCurrentView('orders'); }}
+                    className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-emerald-200 hover:border-emerald-400">
+                    <div className="flex items-center justify-between mb-4">
+                      <Package className="text-emerald-600" size={32} />
+                      <span className="text-3xl font-bold text-stone-800">{ordersDelivered.length}</span>
+                    </div>
+                    <h3 className="text-stone-600 font-semibold text-lg">Delivered</h3>
+                  </div>
+
+                  {/* Total Revenue */}
+                  <div className="bg-gradient-to-br from-green-600 to-emerald-700 rounded-2xl p-6 shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <DollarSign className="text-white" size={32} />
+                      <span className="text-3xl font-bold text-white">${revenueWithoutDelivery.toFixed(2)}</span>
+                    </div>
+                    <h3 className="text-green-50 font-semibold text-lg">Total Revenue YTD</h3>
+                  </div>
+
+                  {/* Delivery Revenue */}
+                  <div className="bg-gradient-to-br from-amber-600 to-orange-700 rounded-2xl p-6 shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <TrendingUp className="text-white" size={32} />
+                      <span className="text-3xl font-bold text-white">${deliveryRevenue.toFixed(2)}</span>
+                    </div>
+                    <h3 className="text-amber-50 font-semibold text-lg">Delivery Revenue YTD</h3>
+                  </div>
+
+                  {/* Sales Tax Owed */}
+                  <div className="bg-gradient-to-br from-red-600 to-rose-700 rounded-2xl p-6 shadow-lg">
+                    <div className="flex items-center justify-between mb-4">
+                      <DollarSign className="text-white" size={32} />
+                      <span className="text-3xl font-bold text-white">${salesTaxOwed.toFixed(2)}</span>
+                    </div>
+                    <h3 className="text-red-50 font-semibold text-lg">Sales Tax Owed (6%)</h3>
+                  </div>
+                </div>
+
+                {/* Recent Orders Preview */}
+                {orders.length > 0 && (
+                  <div className="bg-white rounded-2xl shadow-lg p-6">
+                    <h2 className="text-2xl font-bold text-stone-800 mb-4">Recent Orders</h2>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead className="bg-stone-100">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-stone-700 font-semibold">Customer</th>
+                            <th className="px-4 py-3 text-left text-stone-700 font-semibold">Date</th>
+                            <th className="px-4 py-3 text-left text-stone-700 font-semibold">Status</th>
+                            <th className="px-4 py-3 text-left text-stone-700 font-semibold">Price</th>
+                            <th className="px-4 py-3 text-left text-stone-700 font-semibold">Amount Due</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {orders.slice(0, 5).map(order => (
+                            <tr key={order.id} className="border-b border-stone-200 hover:bg-stone-50">
+                              <td className="px-4 py-3 text-stone-800">{order.customerName}</td>
+                              <td className="px-4 py-3 text-stone-600">{order.dateMessaged || order.dateOrdered}</td>
+                              <td className="px-4 py-3">
+                                <select
+                                  value={order.buildStatus}
+                                  onChange={async (e) => {
+                                    const newStatus = e.target.value;
+                                    const updatedOrder = { ...order, buildStatus: newStatus };
+                                    await saveToFirebase(updatedOrder);
+                                  }}
+                                  className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium border-2 border-blue-300 focus:border-blue-500 focus:outline-none cursor-pointer"
+                                >
+                                  <option value="just messaged">Just Messaged</option>
+                                  <option value="not started">Not Started</option>
+                                  <option value="being made">Being Made</option>
+                                  <option value="Waiting on glue to dry">Waiting on Glue to Dry</option>
+                                  <option value="Ready for pickup">Ready for Pickup</option>
+                                  <option value="ready for delivery">Ready for Delivery</option>
+                                  <option value="picked up">Picked Up</option>
+                                  <option value="delivered">Delivered</option>
+                                </select>
+                              </td>
+                              <td className="px-4 py-3 text-stone-800">${order.price || 0}</td>
+                              <td className="px-4 py-3 font-semibold" style={{ color: (order.amountDue || 0) === 0 ? '#16a34a' : '#dc2626' }}>
+                                ${order.amountDue?.toFixed(2) || '0.00'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {currentView === 'orders' && (
+              <div className="bg-white rounded-2xl shadow-lg p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-stone-800">
+                    {filterStatus === 'all' && 'All Orders'}
+                    {filterStatus === 'year' && `Orders This Year (${currentYear})`}
+                    {filterStatus === 'people-messaged-year' && `People Messaged This Year (${currentYear})`}
+                    {filterStatus === 'just-messaged' && 'Just Messaged'}
+                    {filterStatus === 'not-started' && 'Orders Not Started'}
+                    {filterStatus === 'being-made' && 'Orders Being Made'}
+                    {filterStatus === 'waiting-pickup' && 'Waiting for Pickup'}
+                    {filterStatus === 'waiting-delivery' && 'Waiting for Delivery'}
+                    {filterStatus === 'picked-up' && 'Picked Up'}
+                    {filterStatus === 'delivered' && 'Delivered'}
+                  </h2>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        const currentOrders = getFilteredOrders();
+                        const excelData = currentOrders.map(o => ({
+                          'Customer Name': o.customerName,
+                          'Date Messaged': o.dateMessaged || '',
+                          'Date Ordered': o.dateOrdered || '',
+                          'Build Status': o.buildStatus,
+                          'Delivery Type': o.deliveryType,
+                          'Delivery Charge': o.deliveryCharge || 0,
+                          'Date Picked Up': o.datePickedUp || '',
+                          'Price': o.price || 0,
+                          'Amount Paid': o.amountPaid || 0,
+                          'Amount Due': o.amountDue || 0,
+                          'Payment Method': o.paymentMethod,
+                          'Planter Size': o.planterSize || ''
+                        }));
+                        
+                        const ws = XLSX.utils.json_to_sheet(excelData);
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, 'Orders');
+                        
+                        let filename = 'orders.xlsx';
+                        if (filterStatus === 'all') filename = 'all_orders.xlsx';
+                        else if (filterStatus === 'year') filename = `orders_${currentYear}.xlsx`;
+                        else if (filterStatus === 'people-messaged-year') filename = `people_messaged_${currentYear}.xlsx`;
+                        else if (filterStatus === 'just-messaged') filename = 'just_messaged.xlsx';
+                        else if (filterStatus === 'not-started') filename = 'not_started.xlsx';
+                        else if (filterStatus === 'being-made') filename = 'being_made.xlsx';
+                        else if (filterStatus === 'waiting-pickup') filename = 'waiting_pickup.xlsx';
+                        else if (filterStatus === 'waiting-delivery') filename = 'waiting_delivery.xlsx';
+                        else if (filterStatus === 'picked-up') filename = 'picked_up.xlsx';
+                        else if (filterStatus === 'delivered') filename = 'delivered.xlsx';
+                        
+                        XLSX.writeFile(wb, filename);
+                      }}
+                      className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-semibold transition-all flex items-center gap-2"
+                    >
+                      <Download size={20} />
+                      Download This View
+                    </button>
+                    <button
+                      onClick={() => setCurrentView('dashboard')}
+                      className="bg-stone-600 hover:bg-stone-700 text-white px-6 py-2 rounded-lg font-semibold transition-all"
+                    >
+                      ← Back to Dashboard
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-stone-100">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Customer</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Date Messaged</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Date Ordered</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Status</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Delivery</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Size</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Price</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Del Charge</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Paid</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Amount Due</th>
+                        <th className="px-4 py-3 text-left text-stone-700 font-semibold">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {getFilteredOrders().map(order => (
+                        <tr key={order.id} className="border-b border-stone-200 hover:bg-stone-50">
+                          <td className="px-4 py-3 text-stone-800 font-medium">{order.customerName}</td>
+                          <td className="px-4 py-3 text-stone-600">{order.dateMessaged || '-'}</td>
+                          <td className="px-4 py-3 text-stone-600">{order.dateOrdered || '-'}</td>
+                          <td className="px-4 py-3">
+                            <select
+                              value={order.buildStatus}
+                              onChange={async (e) => {
+                                const newStatus = e.target.value;
+                                const updatedOrder = { ...order, buildStatus: newStatus };
+                                await saveToFirebase(updatedOrder);
+                              }}
+                              className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium border-2 border-blue-300 focus:border-blue-500 focus:outline-none cursor-pointer"
+                            >
+                              <option value="just messaged">Just Messaged</option>
+                              <option value="not started">Not Started</option>
+                              <option value="being made">Being Made</option>
+                              <option value="Waiting on glue to dry">Waiting on Glue to Dry</option>
+                              <option value="Ready for pickup">Ready for Pickup</option>
+                              <option value="ready for delivery">Ready for Delivery</option>
+                              <option value="picked up">Picked Up</option>
+                              <option value="delivered">Delivered</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 text-stone-600">{order.deliveryType}</td>
+                          <td className="px-4 py-3 text-stone-600">{order.planterSize}</td>
+                          <td className="px-4 py-3 text-stone-800">${order.price || 0}</td>
+                          <td className="px-4 py-3 text-stone-600">${order.deliveryCharge || 0}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1">
+                              <span className="text-stone-600">$</span>
+                              <input
+                                type="text"
+                                value={order.amountPaid || ''}
+                                onChange={async (e) => {
+                                  const value = e.target.value.replace(/[^0-9.]/g, '');
+                                  const price = parseFloat(order.price) || 0;
+                                  const deliveryCharge = parseFloat(order.deliveryCharge) || 0;
+                                  const totalPrice = price + deliveryCharge;
+                                  const newAmountDue = totalPrice - (parseFloat(value) || 0);
+                                  
+                                  const updatedOrder = {
+                                    ...order,
+                                    amountPaid: value,
+                                    amountDue: newAmountDue,
+                                    totalPrice: totalPrice
+                                  };
+                                  await saveToFirebase(updatedOrder);
+                                }}
+                                className="w-20 px-2 py-1 border-2 border-stone-300 rounded focus:border-green-500 focus:outline-none text-green-700 font-medium"
+                                placeholder="0.00"
+                              />
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-semibold" style={{ color: (order.amountDue || 0) === 0 ? '#16a34a' : '#dc2626' }}>
+                            ${order.amountDue?.toFixed(2) || '0.00'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleEdit(order)}
+                                className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg transition-all"
+                                title="Edit"
+                              >
+                                <Edit2 size={16} />
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirm(order)}
+                                className="bg-red-600 hover:bg-red-700 text-white p-2 rounded-lg transition-all"
+                                title="Delete"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {currentView === 'form' && (
+              <div className="bg-white rounded-2xl shadow-lg p-8">
+                <h2 className="text-3xl font-bold text-stone-800 mb-6">
+                  {editingOrder ? 'Edit Order' : 'New Order'}
+                </h2>
+                
+                <form onSubmit={(e) => e.preventDefault()} className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Form fields - keeping same as before */}
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Customer Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.customerName}
+                        onChange={(e) => setFormData({...formData, customerName: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Date Messaged *</label>
+                      <input
+                        type="date"
+                        required
+                        value={formData.dateMessaged}
+                        onChange={(e) => setFormData({...formData, dateMessaged: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Date Ordered</label>
+                      <input
+                        type="date"
+                        value={formData.dateOrdered}
+                        onChange={(e) => setFormData({...formData, dateOrdered: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Build Status *</label>
+                      <select
+                        required
+                        value={formData.buildStatus}
+                        onChange={(e) => setFormData({...formData, buildStatus: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      >
+                        <option value="just messaged">Just Messaged</option>
+                        <option value="not started">Not Started</option>
+                        <option value="being made">Being Made</option>
+                        <option value="Waiting on glue to dry">Waiting on Glue to Dry</option>
+                        <option value="Ready for pickup">Ready for Pickup</option>
+                        <option value="ready for delivery">Ready for Delivery</option>
+                        <option value="picked up">Picked Up</option>
+                        <option value="delivered">Delivered</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">
+                        Delivery Type {formData.buildStatus !== 'just messaged' && '*'}
+                      </label>
+                      <select
+                        required={formData.buildStatus !== 'just messaged'}
+                        value={formData.deliveryType}
+                        onChange={(e) => setFormData({...formData, deliveryType: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      >
+                        <option value="unknown">Unknown</option>
+                        <option value="pickup">Pickup</option>
+                        <option value="delivery">Delivery</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Delivery Charge</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3.5 text-stone-600 font-semibold">$</span>
+                        <input
+                          type="text"
+                          value={formData.deliveryCharge}
+                          onChange={(e) => {
+                            const value = e.target.value.replace(/[^0-9.]/g, '');
+                            setFormData({...formData, deliveryCharge: value});
+                          }}
+                          className="w-full pl-8 pr-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Date Picked Up</label>
+                      <input
+                        type="date"
+                        value={formData.datePickedUp}
+                        onChange={(e) => setFormData({...formData, datePickedUp: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">
+                        Price {formData.buildStatus !== 'just messaged' && '*'}
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3.5 text-stone-600 font-semibold">$</span>
+                        <input
+                          type="text"
+                          required={formData.buildStatus !== 'just messaged'}
+                          value={formData.price}
+                          onChange={(e) => {
+                            const value = e.target.value.replace(/[^0-9.]/g, '');
+                            setFormData({...formData, price: value});
+                          }}
+                          className="w-full pl-8 pr-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Amount Paid</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3.5 text-stone-600 font-semibold">$</span>
+                        <input
+                          type="text"
+                          value={formData.amountPaid}
+                          onChange={(e) => {
+                            const value = e.target.value.replace(/[^0-9.]/g, '');
+                            setFormData({...formData, amountPaid: value});
+                          }}
+                          className="w-full pl-8 pr-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Amount Due</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-3.5 text-stone-600 font-semibold">$</span>
+                        <input
+                          type="text"
+                          disabled
+                          value={((parseFloat(formData.price) || 0) + (parseFloat(formData.deliveryCharge) || 0) - (parseFloat(formData.amountPaid) || 0)).toFixed(2)}
+                          className="w-full pl-8 pr-4 py-3 border-2 border-stone-200 rounded-lg bg-stone-100 text-stone-600"
+                          style={{ 
+                            color: ((parseFloat(formData.price) || 0) + (parseFloat(formData.deliveryCharge) || 0) - (parseFloat(formData.amountPaid) || 0)) === 0 ? '#16a34a' : '#dc2626',
+                            fontWeight: '600'
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">Payment Method</label>
+                      <select
+                        value={formData.paymentMethod}
+                        onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                      >
+                        <option value="unknown">Unknown</option>
+                        <option value="cash">Cash</option>
+                        <option value="check">Check</option>
+                        <option value="venmo">Venmo</option>
+                        <option value="zelle">Zelle</option>
+                        <option value="paypal">PayPal</option>
+                        <option value="credit-card">Credit Card</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-stone-700 font-semibold mb-2">
+                        Planter Box Size {formData.buildStatus !== 'just messaged' && '*'}
+                      </label>
+                      <input
+                        type="text"
+                        required={formData.buildStatus !== 'just messaged'}
+                        value={formData.planterSize}
+                        onChange={(e) => setFormData({...formData, planterSize: e.target.value})}
+                        className="w-full px-4 py-3 border-2 border-stone-300 rounded-lg focus:border-amber-500 focus:outline-none transition-all"
+                        placeholder="e.g., 24x12x10"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-4">
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        
+                        const price = parseFloat(formData.price) || 0;
+                        const deliveryCharge = parseFloat(formData.deliveryCharge) || 0;
+                        const amountPaid = parseFloat(formData.amountPaid) || 0;
+                        const totalPrice = price + deliveryCharge;
+                        const amountDue = totalPrice - amountPaid;
+                        
+                        const newEntry = {
+                          customerName: formData.customerName,
+                          dateOrdered: formData.dateOrdered,
+                          dateMessaged: formData.dateMessaged,
+                          buildStatus: formData.buildStatus,
+                          deliveryType: formData.deliveryType,
+                          deliveryCharge: formData.deliveryCharge,
+                          datePickedUp: formData.datePickedUp,
+                          price: formData.price,
+                          amountPaid: formData.amountPaid,
+                          paymentMethod: formData.paymentMethod,
+                          planterSize: formData.planterSize,
+                          id: editingOrder?.id || Date.now().toString(),
+                          amountDue: amountDue,
+                          totalPrice: totalPrice
+                        };
+
+                        const success = await saveToFirebase(newEntry);
+                        
+                        if (success) {
+                          resetForm();
+                          setCurrentView('dashboard');
+                          setTimeout(() => alert('Order saved successfully!'), 200);
+                        }
+                      }}
+                      className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-bold text-lg transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
+                    >
+                      {editingOrder ? 'Update Order' : 'Save Order'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetForm();
+                        setCurrentView('dashboard');
+                      }}
+                      className="bg-stone-500 hover:bg-stone-600 text-white px-8 py-3 rounded-lg font-bold text-lg transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+
+          {/* Delete Confirmation Modal */}
+          {deleteConfirm && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-2xl p-8 shadow-2xl max-w-md">
+                <h3 className="text-2xl font-bold text-stone-800 mb-4">Delete Order?</h3>
+                <p className="text-stone-600 mb-6">
+                  Are you sure you want to delete the order for <strong>{deleteConfirm.customerName}</strong>?
+                  This action cannot be undone.
+                </p>
+                <div className="flex gap-4">
+                  <button
+                    onClick={async () => {
+                      const success = await deleteFromFirebase(deleteConfirm.id);
+                      if (success) {
+                        setDeleteConfirm(null);
+                      }
+                    }}
+                    className="flex-1 bg-red-600 hover:bg-red-700 text-white px-6 py-3 rounded-lg font-bold transition-all"
+                  >
+                    Yes, Delete
+                  </button>
+                  <button
+                    onClick={() => setDeleteConfirm(null)}
+                    className="flex-1 bg-stone-300 hover:bg-stone-400 text-stone-800 px-6 py-3 rounded-lg font-bold transition-all"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    lucide.createIcons();
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<OrderManagementSystem />);
+  </script>
+</body>
+</html>
