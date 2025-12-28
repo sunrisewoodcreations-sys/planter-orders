@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Planter Box Orders</title>
+  
+  <!-- React and ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel for JSX transformation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+        'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+        sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Simple Icon Components using emoji
+    const Icons = {
+      Calendar: () => <span style={{fontSize: '32px'}}>📅</span>,
+      Package: () => <span style={{fontSize: '32px'}}>📦</span>,
+      TrendingUp: () => <span style={{fontSize: '32px'}}>📈</span>,
+      Download: () => <span style={{fontSize: '20px'}}>⬇️</span>,
+      Plus: () => <span style={{fontSize: '20px'}}>➕</span>,
+      Edit: () => <span style={{fontSize: '16px'}}>✏️</span>,
+      Trash: () => <span style={{fontSize: '16px'}}>🗑️</span>,
+      Dollar: () => <span style={{fontSize: '32px'}}>💵</span>,
+    };
+
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyC93INjbUl7i6fXwql-91ZGBVE5rA5RSuY",
+      authDomain: "planter-box-orders.firebaseapp.com",
+      databaseURL: "https://planter-box-orders-default-rtdb.firebaseio.com",
+      projectId: "planter-box-orders",
+      storageBucket: "planter-box-orders.firebasestorage.app",
+      messagingSenderId: "541456064022",
+      appId: "1:541456064022:web:2d86a9097054bcad6c1f37"
+    };
+
+    // Initialize Firebase
+    let database = null;
+    let ordersRef = null;
+
+    try {
+      firebase.initializeApp(firebaseConfig);
+      database = firebase.database();
+      ordersRef = database.ref('orders');
+      console.log('✅ Firebase initialized successfully!');
+    } catch (error) {
+      console.error('❌ Firebase initialization error:', error);
+    }
+
+    function OrderManagementSystem() {
+      const [orders, setOrders] = useState([]);
+      const [currentView, setCurrentView] = useState('dashboard');
+      const [filterStatus, setFilterStatus] = useState('all');
+      const [editingOrder, setEditingOrder] = useState(null);
+      const [showForm, setShowForm] = useState(false);
+      const [loading, setLoading] = useState(true);
+      const [deleteConfirm, setDeleteConfirm] = useState(null);
+      const [syncStatus, setSyncStatus] = useState('Checking...');
+      
+      const [formData, setFormData] = useState({
+        customerName: '',
+        dateOrdered: '',
+        dateMessaged: new Date().toISOString().split('T')[0],
+        buildStatus: 'not started',
+        deliveryType: 'unknown',
+        deliveryCharge: '',
+        datePickedUp: '',
+        price: '',
+        amountPaid: '',
+        paymentMethod: 'unknown',
+        planterSize: ''
+      });
+
+      // Load data from Firebase
+      useEffect(() => {
+        setSyncStatus('🔄 Syncing...');
+        
+        const unsubscribe = ordersRef.on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            const ordersArray = Object.keys(data).map(key => ({
+              ...data[key],
+              id: key
+            }));
+            
+            const ordersWithCorrectAmountDue = ordersArray.map(order => {
+              const price = parseFloat(order.price) || 0;
+              const deliveryCharge = parseFloat(order.deliveryCharge) || 0;
+              const amountPaid = parseFloat(order.amountPaid) || 0;
+              const totalPrice = price + deliveryCharge;
+              const amountDue = totalPrice - amountPaid;
+              
+              return {
+                ...order,
+                totalPrice: totalPrice,
+                amountDue: amountDue
+              };
+            });
+            
+            setOrders(ordersWithCorrectAmountDue);
+            setSyncStatus('✅ Synced');
+          } else {
+            setOrders([]);
+            setSyncStatus('✅ Synced (No Data)');
+          }
+          setLoading(false);
+        }, (error) => {
+          console.error('Firebase read error:', error);
+          setSyncStatus('❌ Sync Error');
+          setLoading(false);
+        });
+
+        return () => ordersRef.off('value', unsubscribe);
+      }, []);
+
+      const currentYear = new Date().getFullYear();
+      const ordersThisYear = orders.filter(o => {
+        const year = o.dateMessaged ? new Date(o.dateMessaged).getFullYear() : 
+                     o.dateOrdered ? new Date(o.dateOrdered).getFullYear() : null;
+        return year === currentYear;
+      });
+
+      const ordersNotStarted = orders.filter(o => o.buildStatus === 'not started');
+      const ordersBeingMade = orders.filter(o => o.buildStatus === 'being made' || o.buildStatus === 'Waiting on glue to dry');
+      const ordersWaitingPickup = orders.filter(o => o.buildStatus === 'Ready for pickup');
+      const ordersWaitingDelivery = orders.filter(o => o.buildStatus === 'ready for delivery');
+      const ordersPickedUp = orders.filter(o => o.buildStatus === 'picked up');
+      const ordersDelivered = orders.filter(o => o.buildStatus === 'delivered');
+      const justMessaged = orders.filter(o => o.buildStatus === 'just messaged');
+      const peopleMessagedThisYear = ordersThisYear.length;
+
+      const totalRevenue = ordersThisYear.reduce((sum, o) => sum + (parseFloat(o.amountPaid) || 0), 0);
+      const deliveryRevenue = ordersThisYear.reduce((sum, o) => sum + (parseFloat(o.deliveryCharge) || 0), 0);
+      const revenueWithoutDelivery = totalRevenue - deliveryRevenue;
+      const salesTaxOwed = revenueWithoutDelivery * 0.06;
+
+      const saveToFirebase = async (orderData) => {
+        try {
+          setSyncStatus('🔄 Saving...');
+          if (orderData.id && typeof orderData.id === 'string' && orderData.id.startsWith('-')) {
+            await ordersRef.child(orderData.id).update(orderData);
+          } else {
+            const newOrderRef = ordersRef.push();
+            await newOrderRef.set({
+              ...orderData,
+              id: newOrderRef.key
+            });
+          }
+          setSyncStatus('✅ Saved');
+          return true;
+        } catch (error) {
+          console.error('Firebase save error:', error);
+          setSyncStatus('❌ Save Error');
+          alert('Error saving: ' + error.message);
+          return false;
+        }
+      };
+
+      const deleteFromFirebase = async (orderId) => {
+        try {
+          setSyncStatus('🔄 Deleting...');
+          await ordersRef.child(orderId).remove();
+          setSyncStatus('✅ Deleted');
+          return true;
+        } catch (error) {
+          console.error('Firebase delete error:', error);
+          setSyncStatus('❌ Delete Error');
+          alert('Error deleting: ' + error.message);
+          return false;
+        }
+      };
+
+      if (loading) {
+        return (
+          <div className="min-h-screen bg-stone-50 flex items-center justify-center">
+            <div className="text-2xl text-stone-600">Loading...</div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-stone-50">
+          <div className="bg-gradient-to-r from-amber-900 via-orange-800 to-stone-800 shadow-xl">
+            <div className="max-w-7xl mx-auto px-6 py-8">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-4xl font-bold text-amber-50 tracking-tight" style={{ fontFamily: 'Georgia, serif' }}>
+                    Planter box orders
+                  </h1>
+                  <p className="text-amber-200 mt-2 text-sm">{syncStatus}</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setFormData({
+                        customerName: '',
+                        dateOrdered: '',
+                        dateMessaged: new Date().toISOString().split('T')[0],
+                        buildStatus: 'not started',
+                        deliveryType: 'unknown',
+                        deliveryCharge: '',
+                        datePickedUp: '',
+                        price: '',
+                        amountPaid: '',
+                        paymentMethod: 'unknown',
+                        planterSize: ''
+                      });
+                      setEditingOrder(null);
+                      setShowForm(true);
+                      setCurrentView('form');
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg"
+                  >
+                    <Icons.Plus /> New Order
+                  </button>
+                  <button
+                    onClick={() => {
+                      const excelData = ordersThisYear.map(o => ({
+                        'Customer Name': o.customerName,
+                        'Date Messaged': o.dateMessaged || '',
+                        'Date Ordered': o.dateOrdered || '',
+                        'Build Status': o.buildStatus,
+                        'Delivery Type': o.deliveryType,
+                        'Delivery Charge': o.deliveryCharge || 0,
+                        'Date Picked Up': o.datePickedUp || '',
+                        'Price': o.price || 0,
+                        'Amount Paid': o.amountPaid || 0,
+                        'Amount Due': o.amountDue || 0,
+                        'Payment Method': o.paymentMethod,
+                        'Planter Size': o.planterSize || ''
+                      }));
+                      const ws = XLSX.utils.json_to_sheet(excelData);
+                      const wb = XLSX.utils.book_new();
+                      XLSX.utils.book_append_sheet(wb, ws, 'Orders YTD');
+                      XLSX.writeFile(wb, `orders_${currentYear}_ytd.xlsx`);
+                    }}
+                    className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2 transition-all shadow-lg"
+                  >
+                    <Icons.Download /> Export YTD
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="max-w-7xl mx-auto px-6 py-8">
+            {currentView === 'dashboard' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div onClick={() => { setFilterStatus('all'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-amber-200 hover:border-amber-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{orders.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Total Orders</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('year'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-green-200 hover:border-green-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Calendar />
+                    <span className="text-3xl font-bold text-stone-800">{ordersThisYear.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Orders This Year</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('people-messaged-year'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-indigo-200 hover:border-indigo-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{peopleMessagedThisYear}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">People Messaged This Year</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('just-messaged'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-yellow-200 hover:border-yellow-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{justMessaged.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Just Messaged</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('not-started'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-red-200 hover:border-red-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersNotStarted.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Not Started</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('being-made'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-blue-200 hover:border-blue-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersBeingMade.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Being Made</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('waiting-pickup'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-purple-200 hover:border-purple-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersWaitingPickup.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Waiting for Pickup</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('waiting-delivery'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-orange-200 hover:border-orange-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersWaitingDelivery.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Waiting for Delivery</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('picked-up'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-teal-200 hover:border-teal-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersPickedUp.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Picked Up</h3>
+                </div>
+
+                <div onClick={() => { setFilterStatus('delivered'); setCurrentView('orders'); }}
+                  className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all cursor-pointer transform hover:-translate-y-1 border-2 border-emerald-200 hover:border-emerald-400">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Package />
+                    <span className="text-3xl font-bold text-stone-800">{ordersDelivered.length}</span>
+                  </div>
+                  <h3 className="text-stone-600 font-semibold text-lg">Delivered</h3>
+                </div>
+
+                <div className="bg-gradient-to-br from-green-600 to-emerald-700 rounded-2xl p-6 shadow-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Dollar />
+                    <span className="text-3xl font-bold text-white">${revenueWithoutDelivery.toFixed(2)}</span>
+                  </div>
+                  <h3 className="text-green-50 font-semibold text-lg">Total Revenue YTD</h3>
+                </div>
+
+                <div className="bg-gradient-to-br from-amber-600 to-orange-700 rounded-2xl p-6 shadow-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.TrendingUp />
+                    <span className="text-3xl font-bold text-white">${deliveryRevenue.toFixed(2)}</span>
+                  </div>
+                  <h3 className="text-amber-50 font-semibold text-lg">Delivery Revenue YTD</h3>
+                </div>
+
+                <div className="bg-gradient-to-br from-red-600 to-rose-700 rounded-2xl p-6 shadow-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <Icons.Dollar />
+                    <span className="text-3xl font-bold text-white">${salesTaxOwed.toFixed(2)}</span>
+                  </div>
+                  <h3 className="text-red-50 font-semibold text-lg">Sales Tax Owed (6%)</h3>
+                </div>
+              </div>
+            )}
+
+            {currentView === 'orders' && (
+              <div className="bg-white rounded-2xl shadow-lg p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <h2 className="text-2xl font-bold text-stone-800">
+                    {filterStatus === 'all' && 'All Orders'}
+                    {filterStatus === 'year' && `Orders This Year (${currentYear})`}
+                    {filterStatus === 'people-messaged-year' && `People Messaged This Year (${currentYear})`}
+                    {filterStatus === 'just-messaged' && 'Just Messaged'}
+                    {filterStatus === 'not-started' && 'Orders Not Started'}
+                    {filterStatus === 'being-made' && 'Orders Being Made'}
+                    {filterStatus === 'waiting-pickup' && 'Waiting for Pickup'}
+                    {filterStatus === 'waiting-delivery' && 'Waiting for Delivery'}
+                    {filterStatus === 'picked-up' && 'Picked Up'}
+                    {filterStatus === 'delivered' && 'Delivered'}
+                  </h2>
+                  <button
+                    onClick={() => setCurrentView('dashboard')}
+                    className="bg-stone-600 hover:bg-stone-700 text-white px-6 py-2 rounded-lg font-semibold transition-all"
+                  >
+                    ← Back
+                  </button>
+                </div>
+                
+                <div className="text-center text-stone-600 py-8">
+                  Click a metric box on the dashboard to view filtered orders
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<OrderManagementSystem />);
+  </script>
+</body>
+</html>
